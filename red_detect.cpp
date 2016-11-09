@@ -10,6 +10,8 @@ using namespace cv;
 using namespace std;
 
 Mat put_on_image(Mat &output, Mat &img_to_put, int pos_x, int pos_y );
+std::vector<Vec3f> detect_circles (Mat image);
+void draw_circle_on(Mat &image, std::vector<Vec3f> &circles);
 
 int main( int argc, char** argv ) {
         
@@ -21,23 +23,23 @@ int main( int argc, char** argv ) {
     }
 
 	Mat logo;
-//    logo = imread("drupal.png", CV_IMWRITE_PNG_COMPRESSION);   // Read the file
-    logo = imread("example.png", CV_IMWRITE_JPEG_QUALITY);   // Read the file
+//    logo = imread("example.png", CV_IMWRITE_PNG_COMPRESSION);   // Read the file
+    logo = imread("./media/example.png", CV_IMWRITE_JPEG_QUALITY);   // Read the file
 
     if ( !logo.data ) {
        	std::cout <<  "Could not open or find the logo" << std::endl ;
        	return -1;
     }
 
-	std::string sample_video_filename("output.avi");
+	std::string sample_video_filename("./media/output.avi");
 	Mat sample_frame;
     VideoCapture cap_sample(sample_video_filename);
     if(!cap_sample.isOpened()) {
         std::cout << "Error can't find the file: " << sample_video_filename << std::endl;
     }
 
-	/*
-// example 
+	/*********************************************************************************
+	// example 
 	namedWindow( "w", 1);
     while(1){
 		cap_sample >> sample_frame;
@@ -50,7 +52,7 @@ int main( int argc, char** argv ) {
 			imshow("w",sample_frame);
 			waitKey(20); // waits to display frame
 	}
-*/
+	*////*****************************************************************************
 
 
     namedWindow("Control", CV_WINDOW_AUTOSIZE); //create a window called "Control"
@@ -91,7 +93,6 @@ int main( int argc, char** argv ) {
 
 
         bool bSuccess = cap.read(img_camera); // read a new frame from video
-
         if (!bSuccess) { //if not success, break loop
              cout << "Cannot read a frame from video stream" << endl;
              break;
@@ -145,7 +146,9 @@ int main( int argc, char** argv ) {
 			std::cout << "posX:" << posX << "\t posY:" <<  posY << "\t iLastX:" << iLastX << "\t iLastY:" << iLastY;
   		}
 */
-		
+		std::vector<Vec3f> circles = detect_circles(imgThresholded);
+		draw_circle_on(img_camera, circles);
+
 		imshow("Thresholded Image", imgThresholded); //show the thresholded image
 //		img_camera = img_camera + imgLines;
 
@@ -159,6 +162,9 @@ int main( int argc, char** argv ) {
 			 cap_sample.set(CV_CAP_PROP_POS_FRAMES,0);
 			 continue;
 		}
+
+
+		
 
 		imshow("Project", put_on_image(img_camera, sample_frame, dM10/dArea, dM01/dArea) ); //show the original image
 		
@@ -177,7 +183,35 @@ int main( int argc, char** argv ) {
 
 }
 
+// copy because we don't want to modify original Mat object
+std::vector<Vec3f> detect_circles (Mat image) {
+	
+	int method = CV_HOUGH_GRADIENT;
+	double dp = 2;
+	double minDist = image.rows/4; 
+	double param1=20;
+	double param2=10;
+	int minRadius=0;
+	int maxRadius=20;
 
+	GaussianBlur( image, image, Size(9, 9), 2, 2 );
+	vector<Vec3f> circles;
+	HoughCircles(image, circles, method, dp, minDist, param1, param2, minRadius, maxRadius );
+	
+	return circles;
+}
+
+void draw_circle_on(Mat &image, std::vector<Vec3f> &circles) {
+    // change to for-each
+	for( size_t i = 0; i < circles.size(); i++ ) {
+         Point center(cvRound(circles[i][0]), cvRound(circles[i][1]));
+         int radius = cvRound(circles[i][2]);
+         // draw the circle center
+         circle( image, center, 3, Scalar(0,255,0), -1, 8, 0 );
+         // draw the circle outline
+         circle( image, center, radius, Scalar(0,0,255), 3, 8, 0 );
+    }
+}
 
 Mat put_on_image(Mat &output, Mat &img_to_put, int pos_x, int pos_y ) {
 
@@ -206,5 +240,6 @@ Mat put_on_image(Mat &output, Mat &img_to_put, int pos_x, int pos_y ) {
 
 	return dst;
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
