@@ -11,7 +11,13 @@
 using namespace cv;
 using namespace std;
 
-
+typedef std::chrono::high_resolution_clock::time_point time_var;
+template<typename F, typename... Args>
+uint64_t fun_time(F func, Args&&... args){
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    func(std::forward<Args>(args)...);
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+}
 
 void d3_transform(const Mat &src_image, Mat &output, const std::array< std::array<int, 2>, 4> & trans_cord, int precision=100) {
 
@@ -170,11 +176,11 @@ Mat put_on_image(Mat &output, Mat &img_to_put, int pos_x, int pos_y ) {
 	Mat dst(output.rows, output.cols, CV_8UC3,  cv::Scalar(0,0,0));
 	output.copyTo(dst);
 	if (pos_x < 0 ||
-	        pos_y < 0 ||
-	        pos_x - img_weight/2-1 <= 0 ||
-	        pos_y - img_height/2-1 <= 0 ||
-	        pos_x + img_weight/2+1 >= output.cols ||
-	        pos_y + img_height/2+1 >= output.rows) {
+	    pos_y < 0 ||
+	    pos_x - img_weight/2-1 <= 0 ||
+	    pos_y - img_height/2-1 <= 0 ||
+	    pos_x + img_weight/2+1 >= output.cols ||
+	    pos_y + img_height/2+1 >= output.rows) {
 
 		return dst;
 	}
@@ -203,15 +209,17 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
         for(const auto &vec3f : circles) {
             int relative_X = cvRound(vec3f[0] -  omoments.dM10_by_dArea());
             int relative_Y = cvRound(vec3f[1] -  omoments.dM01_by_dArea());
-            loc_map.emplace(std::atan2(relative_Y, relative_X), Point2f(relative_X,relative_Y));
+            std::cout << "relativeY:" << relative_Y << std::endl;
+            loc_map.emplace(std::atan2(relative_Y, relative_X), Point2f(relative_X, relative_Y));
         }
         return loc_map;
     } ();
 
-    //std::cout << "point **" << std::endl;
-    //for (const auto &ele : point_map) {
-    //	std::cout << ele.first << " : " << ele.second << std::endl;
-    //}
+    std::cout << "points [";
+    for (const auto &ele : point_map) {
+    	std::cout << ele.first << " : " << ele.second << " ";
+    }
+    std::cout << '\n';
 
     // reverse iterator because the first map key is in bottom left quadrant ~(-2:-3)
     bool rec_ok = true;
@@ -240,7 +248,7 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
         if( std::max(trans_cord[0][1]-trans_cord[2][1], trans_cord[1][1]-trans_cord[3][1]) <= 5 ) rec_ok = false;
         if( std::max(trans_cord[2][0]-trans_cord[0][0], trans_cord[1][0]-trans_cord[3][0]) <= 5 ) rec_ok = false;
     }
-    //	Mat d3_transform(const Mat &src_image, const std::array< std::array<int, 2>, 4> & trans_cord
+    
     if(rec_ok) {
         d3_transform(src_image, output, trans_cord);
     } else {
@@ -249,8 +257,10 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
 }
 
 /// started from http://jepsonsblog.blogspot.com/2012/10/overlay-transparent-image-in-opencv.html
-void overlayImage(const Mat &background, const Mat &foreground, Mat &output, Point2i location) {
-	background.copyTo(output);
+void overlay_image(const Mat &background, const Mat &foreground, Mat &output,const O_moments_data &omoments) {
+        
+    Point2i location = Point2i (static_cast<int>(omoments.dM10_by_dArea() - foreground.cols/2) ,
+                                static_cast<int>(omoments.dM01_by_dArea() - foreground.rows/2));
 
     // check if whether the coordinates are possible to draw
 	int fore_weight = foreground.cols;
@@ -262,10 +272,13 @@ void overlayImage(const Mat &background, const Mat &foreground, Mat &output, Poi
 	    location.x + fore_weight/2+1 >= background.cols ||
 	    location.y + fore_height/2+1 >= background.rows) {
 
-        std::cout << "overlayImage fail" << std::endl;
-		return;
+
+        std::cout << "overlayImage fail " << location.x << ":" << location.y << std::endl;
+		//return;
+        throw std::invalid_argument("get_fitted_to_4cirles exactly needs 4 circles");
 	}
 
+	background.copyTo(output);
 
 	// start at the row indicated by location, or at row 0 if location.y is negative.
 	for(int y = std::max(location.y , 0); y < background.rows; ++y) {
@@ -310,8 +323,6 @@ int main( int argc, char** argv ) {
 	}
 
 	Mat logo;
-//    logo = imread("example.png", CV_IMWRITE_PNG_COMPRESSION);   // Read the file
-//	logo = imread("./media/example.png", CV_IMWRITE_JPEG_QUALITY);   // Read the file
 	logo = imread("./media/example2.png", CV_LOAD_IMAGE_UNCHANGED);   // Read the file
 
 	if ( !logo.data ) {
@@ -328,10 +339,11 @@ int main( int argc, char** argv ) {
 
 	namedWindow("Control", CV_WINDOW_AUTOSIZE); //create a window called "Control"
 
-	int iLowH = 0;
+    // HSV color threshold parameters
+	int iLowH = 37;
 	int iHighH = 179;
 
-	int iLowS = 73;
+	int iLowS = 40;
 	int iHighS = 255;
 
 	int iLowV = 125;
@@ -347,7 +359,14 @@ int main( int argc, char** argv ) {
 	cvCreateTrackbar("LowV", "Control", &iLowV, 255); //Value (0 - 255)
 	cvCreateTrackbar("HighV", "Control", &iHighV, 255);
 
-	Dct_circle_param cparam = {10,0,50,100,155,5,30};
+    // circles detection parameters
+	int precission = 10;
+    int dp = 0;
+    int minDist = 100;
+    int param1 = 100; int param2 = 150;
+    int minRadius = 5; int maxRadius =30;
+
+    Dct_circle_param cparam = {precission, dp, minDist, param1, param2, minRadius, maxRadius};
 
 	cvCreateTrackbar("dp", "Control", &cparam.dp, 15);
 	cvCreateTrackbar("minDist", "Control", &cparam.minDist, 500);
@@ -366,8 +385,9 @@ int main( int argc, char** argv ) {
 	Mat imgLines = Mat::zeros( imgTmp.size(), CV_8UC3 );;
 	Mat logo_transformed(logo);
 
+    uint64_t fit_circles,overlay_img;
 	while (true) {
-
+try {
 		std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 
 
@@ -385,8 +405,8 @@ int main( int argc, char** argv ) {
 
 		Mat imgThresholded;
 
-		GaussianBlur( imgThresholded, imgThresholded, Size(9, 9), 2, 2 );
 		inRange(imgHSV, Scalar(iLowH, iLowS, iLowV), Scalar(iHighH, iHighS, iHighV), imgThresholded); //Threshold the image
+		//GaussianBlur( imgThresholded, imgThresholded, Size(9, 9), 2, 2 );
 
 		//morphological opening (remove small objects from the foreground)
 		erode(imgThresholded, imgThresholded, getStructuringElement(MORPH_ELLIPSE, Size(7, 7)) );
@@ -407,17 +427,17 @@ int main( int argc, char** argv ) {
 		imshow("Thresholded Image", imgThresholded); //show the thresholded image
 
 		std::vector<Vec3f> circles = detect_circles(imgThresholded, cparam);
-		std::cout << "circles: " << circles.size() << " -- ";
-        
+		std::cout << "circles: " << circles.size() << " ";
+       
+
         if(circles.size() == 4) {
             omoments = calculate_oMoments_circles(circles);
-            fit_to_4cirles(logo, logo_transformed, circles, omoments);
-        } else {
-            waitKey(10);
-            continue;
-        }
-
-
+            fit_circles = fun_time(fit_to_4cirles, logo, logo_transformed, circles, omoments);
+        } 
+        //else {
+        //    waitKey(10);
+        //    continue;
+        //}
 		
 		// get frame from sample avi
 		//cap_sample >> sample_frame;
@@ -433,21 +453,19 @@ int main( int argc, char** argv ) {
 
         Mat overlay_result;
         
-        Point2i omoment_point2i = Point2i ( static_cast<int>(omoments.dM10_by_dArea() - logo_transformed.cols/2) ,
-                                            static_cast<int>(omoments.dM01_by_dArea() - logo_transformed.rows/2));
-        overlayImage(img_camera, logo_transformed, overlay_result, omoment_point2i);
+        overlay_img = fun_time(overlay_image, img_camera, logo_transformed, overlay_result, omoments);
         imshow("Project", overlay_result );
-
+		std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 		if (waitKey(30) == 27) { //wait for 'esc' key press for 30ms. If 'esc' key is pressed, break loop
 			cout << "esc key is pressed by user" << endl;
 			break;
 		}
-		std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 		float fps = 1000./std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-		std::cout << " [ fps:" << setprecision(3) <<  fps << " ]" << '\n';
-		//		  << "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
-		//		  << "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b" << std::flush;
+		std::cout   << " [ fps:" << setprecision(4) <<  fps << " ] fic_crc:" << fit_circles << "us, overlay_img:"<< overlay_img
+                    << "us, rest:" << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() << "us" << '\n';
+}
+catch(const std::exception &) { }
 	}
 	return 0;
 
