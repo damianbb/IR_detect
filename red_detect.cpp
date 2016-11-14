@@ -4,12 +4,13 @@
 #include <map>
 #include <chrono>
 #include <cmath>
-
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 
 using namespace cv;
 using namespace std;
+
+constexpr double const_pi() { return std::atan(1)*4; }
 
 typedef std::chrono::high_resolution_clock::time_point time_var;
 template<typename F, typename... Args>
@@ -21,6 +22,14 @@ uint64_t fun_time(F func, Args&&... args){
 
 void d3_transform(const Mat &src_image, Mat &output, const std::array< std::array<int, 2>, 4> & trans_cord, int precision=100) {
 
+max win: -76--150
+514:280-470:156-286:204-320:333
+
+
+                (1)470:156   
+(2)286:204
+                    (0)514:280
+    (3)320:333
 
 	/// Set source points in the corners of image
 	std::array<Point2f, 4> src_cordinate = {{
@@ -30,17 +39,17 @@ void d3_transform(const Mat &src_image, Mat &output, const std::array< std::arra
 	};
 	// transform cordinates to pionts
 	std::array<Point2f, 4> dst_points = {{
-			Point2f( trans_cord[3][0], trans_cord[3][1]  ),
-			Point2f( trans_cord[2][0], trans_cord[2][1] ),
-			Point2f( trans_cord[0][0], trans_cord[0][1] ),
+			Point2f( trans_cord[0][0], trans_cord[0][1]  ),
+			Point2f( trans_cord[3][0], trans_cord[3][1] ),
 			Point2f( trans_cord[1][0], trans_cord[1][1] ),
+			Point2f( trans_cord[2][0], trans_cord[2][1] ),
 		}
 	};
 
 	// absolute to relative cordinate
 	for(auto &i : dst_points) {
-		i.x -= std::min(trans_cord[0][0],trans_cord[3][0]);
-		i.y -= std::min(trans_cord[3][1],trans_cord[2][1]);
+		i.x -= std::min(trans_cord[1][0],trans_cord[0][0]);
+		i.y -= std::min(trans_cord[0][1],trans_cord[3][1]);
 		std::cout << "x" << i.x << "y" << i.y << '\n';
 	}
 
@@ -48,11 +57,11 @@ void d3_transform(const Mat &src_image, Mat &output, const std::array< std::arra
 	/// Set the dst image the same type and size as src
 	Mat warp_dst;
 
-	int max_height = std::max(trans_cord[0][1]-trans_cord[2][1], trans_cord[1][1]-trans_cord[3][1]);
-	int max_weight = std::max(trans_cord[2][0]-trans_cord[0][0], trans_cord[1][0]-trans_cord[3][0]);
-	//std::cout << "\nmax win: " <<  max_height << "-" <<   max_weight << '\n';
-	//std::cout   << trans_cord[0][0] << ":" << trans_cord[0][1] << "-" << trans_cord[1][0] << ":" << trans_cord[1][1] << "-"
-	//            << trans_cord[2][0] << ":" << trans_cord[2][1] << "-" << trans_cord[3][0] << ":" << trans_cord[3][1] << '\n';
+	int max_height = std::max(trans_cord[1][1]-trans_cord[3][1], trans_cord[2][1]-trans_cord[0][1]);
+	int max_weight = std::max(trans_cord[3][0]-trans_cord[1][0], trans_cord[2][0]-trans_cord[0][0]);
+	std::cout << "\nmax win: " <<  max_height << "-" <<   max_weight << '\n';
+	std::cout   << trans_cord[0][0] << ":" << trans_cord[0][1] << "-" << trans_cord[1][0] << ":" << trans_cord[1][1] << "-"
+	            << trans_cord[2][0] << ":" << trans_cord[2][1] << "-" << trans_cord[3][0] << ":" << trans_cord[3][1] << '\n';
 
 	if(max_height < 0 || max_weight < 0) {
 		std::cout << "bad MAX" << std::endl;
@@ -210,7 +219,13 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
             int relative_X = cvRound(vec3f[0] -  omoments.dM10_by_dArea());
             int relative_Y = cvRound(vec3f[1] -  omoments.dM01_by_dArea());
             std::cout << "relativeY:" << relative_Y << std::endl;
-            loc_map.emplace(std::atan2(relative_Y, relative_X), Point2f(relative_X, relative_Y));
+            double tan_result = std::atan2(relative_Y, relative_X);
+            // rotate by pi/2 
+            std::cout << "Rotate " << tan_result << " to ";
+            (tan_result+const_pi()/2) > const_pi() ? tan_result = -const_pi() + (tan_result - const_pi()/2)  : tan_result += const_pi()/2;
+            std::cout  << tan_result << '\n';
+            // fill map
+            loc_map.emplace(tan_result, Point2f(relative_X, relative_Y));
         }
         return loc_map;
     } ();
@@ -226,13 +241,13 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
     {
         // poor test
         auto it_test = point_map.begin();
-        if(it_test->first > 0) rec_ok = false;
+        if(it_test->first >= 0) rec_ok = false;
         it_test++;
         if(it_test->first > 0) rec_ok = false;
         it_test++;
         if(it_test->first < 0) rec_ok = false;
         it_test++;
-        if(it_test->first < 0) rec_ok = false;
+        if(it_test->first <= 0) rec_ok = false;
     }
 
     std::array< std::array<int,2>, 4> trans_cord;
@@ -245,8 +260,8 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
 
     {
         // transform cordinate test
-        if( std::max(trans_cord[0][1]-trans_cord[2][1], trans_cord[1][1]-trans_cord[3][1]) <= 5 ) rec_ok = false;
-        if( std::max(trans_cord[2][0]-trans_cord[0][0], trans_cord[1][0]-trans_cord[3][0]) <= 5 ) rec_ok = false;
+        //if( std::max(trans_cord[1][1]-trans_cord[3][1], trans_cord[2][1]-trans_cord[0][1]) <= 5 ) rec_ok = false;
+        //if( std::max(trans_cord[3][0]-trans_cord[1][0], trans_cord[2][0]-trans_cord[0][0]) <= 5 ) rec_ok = false;
     }
     
     if(rec_ok) {
