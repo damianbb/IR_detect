@@ -2,6 +2,7 @@
 #include <iostream>
 #include <iomanip>
 #include <map>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include "opencv2/highgui/highgui.hpp"
@@ -20,16 +21,7 @@ uint64_t fun_time(F func, Args&&... args){
     return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
-void d3_transform(const Mat &src_image, Mat &output, const std::array< std::array<int, 2>, 4> & trans_cord, int precision=100) {
-
-max win: -76--150
-514:280-470:156-286:204-320:333
-
-
-                (1)470:156   
-(2)286:204
-                    (0)514:280
-    (3)320:333
+void d3_transform(const Mat &src_image, Mat &output,const std::array<Point2f, 4> & points, int precision=100) {
 
 	/// Set source points in the corners of image
 	std::array<Point2f, 4> src_cordinate = {{
@@ -37,31 +29,27 @@ max win: -76--150
 			Point2f( 0, src_image.rows ),	Point2f( src_image.cols , src_image.rows )
 		}
 	};
-	// transform cordinates to pionts
-	std::array<Point2f, 4> dst_points = {{
-			Point2f( trans_cord[0][0], trans_cord[0][1]  ),
-			Point2f( trans_cord[3][0], trans_cord[3][1] ),
-			Point2f( trans_cord[1][0], trans_cord[1][1] ),
-			Point2f( trans_cord[2][0], trans_cord[2][1] ),
-		}
-	};
+    std::array<Point2f, 4> dst_points = points;
 
 	// absolute to relative cordinate
 	for(auto &i : dst_points) {
-		i.x -= std::min(trans_cord[1][0],trans_cord[0][0]);
-		i.y -= std::min(trans_cord[0][1],trans_cord[3][1]);
-		std::cout << "x" << i.x << "y" << i.y << '\n';
+		std::cout << "from: x" << i.x << " y" << i.y << '\n';
+		i.x -= std::min(points[0].x,points[2].x);
+		i.y -= std::min(points[0].y,points[1].y);
+		std::cout << "to  : x" << i.x << " y" << i.y << '\n';
 	}
 
 	Mat warp_mat( 2, 3, CV_32FC1 );
 	/// Set the dst image the same type and size as src
 	Mat warp_dst;
 
-	int max_height = std::max(trans_cord[1][1]-trans_cord[3][1], trans_cord[2][1]-trans_cord[0][1]);
-	int max_weight = std::max(trans_cord[3][0]-trans_cord[1][0], trans_cord[2][0]-trans_cord[0][0]);
+	int max_weight = std::max(dst_points[1].x-dst_points[2].x, dst_points[3].x-dst_points[0].x);
+	int max_height = std::max(dst_points[2].y-dst_points[1].y, dst_points[3].y-dst_points[0].y);
+    
+    // dbg
 	std::cout << "\nmax win: " <<  max_height << "-" <<   max_weight << '\n';
-	std::cout   << trans_cord[0][0] << ":" << trans_cord[0][1] << "-" << trans_cord[1][0] << ":" << trans_cord[1][1] << "-"
-	            << trans_cord[2][0] << ":" << trans_cord[2][1] << "-" << trans_cord[3][0] << ":" << trans_cord[3][1] << '\n';
+	std::cout   << dst_points[0].x << ":" << dst_points[0].y << " - " << dst_points[1].x << ":" << dst_points[1].y << " - "
+	            << dst_points[2].x << ":" << dst_points[2].y << " - " << dst_points[3].x << ":" << dst_points[3].y << '\n';
 
 	if(max_height < 0 || max_weight < 0) {
 		std::cout << "bad MAX" << std::endl;
@@ -220,7 +208,8 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
             int relative_Y = cvRound(vec3f[1] -  omoments.dM01_by_dArea());
             std::cout << "relativeY:" << relative_Y << std::endl;
             double tan_result = std::atan2(relative_Y, relative_X);
-            // rotate by pi/2 
+            // rotate by pi/2   to get:     | 1 | 2 |
+            //                              | 0 | 3 |
             std::cout << "Rotate " << tan_result << " to ";
             (tan_result+const_pi()/2) > const_pi() ? tan_result = -const_pi() + (tan_result - const_pi()/2)  : tan_result += const_pi()/2;
             std::cout  << tan_result << '\n';
@@ -236,7 +225,6 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
     }
     std::cout << '\n';
 
-    // reverse iterator because the first map key is in bottom left quadrant ~(-2:-3)
     bool rec_ok = true;
     {
         // poor test
@@ -250,20 +238,26 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
         if(it_test->first <= 0) rec_ok = false;
     }
 
-    std::array< std::array<int,2>, 4> trans_cord;
+    std::array<Point2f, 4> trans_cord;
+
+    // reorder cordinates to easier transform
+    // 1 | 2        0 | 1
+    // -----  ---> ------
+    // 0 | 3        2 | 3 
+    std::array<decltype(point_map.begin()), 4> iterator_tab;
+    auto map_it = point_map.begin();
+    iterator_tab[2] = map_it;
+    std::advance(map_it,1); iterator_tab[0] = map_it;
+    std::advance(map_it,1); iterator_tab[1] = map_it;
+    std::advance(map_it,1); iterator_tab[3] = map_it;
+
     int point_nu = 0;
-    for (auto it = point_map.rbegin() ; it != point_map.rend() ; ++it) {
-        trans_cord.at(point_nu)[0] = it->second.x + omoments.dM10_by_dArea() ; // back to absolute
-        trans_cord.at(point_nu)[1] = it->second.y + omoments.dM01_by_dArea() ;
+    for (const auto &ele : iterator_tab) {
+        trans_cord.at(point_nu).x = ele->second.x + omoments.dM10_by_dArea() ; // back to absolute
+        trans_cord.at(point_nu).y = ele->second.y + omoments.dM01_by_dArea() ;
         point_nu++;
     }
 
-    {
-        // transform cordinate test
-        //if( std::max(trans_cord[1][1]-trans_cord[3][1], trans_cord[2][1]-trans_cord[0][1]) <= 5 ) rec_ok = false;
-        //if( std::max(trans_cord[3][0]-trans_cord[1][0], trans_cord[2][0]-trans_cord[0][0]) <= 5 ) rec_ok = false;
-    }
-    
     if(rec_ok) {
         d3_transform(src_image, output, trans_cord);
     } else {
@@ -274,9 +268,12 @@ void fit_to_4cirles(const Mat &src_image, Mat &output, const std::vector<Vec3f> 
 /// started from http://jepsonsblog.blogspot.com/2012/10/overlay-transparent-image-in-opencv.html
 void overlay_image(const Mat &background, const Mat &foreground, Mat &output,const O_moments_data &omoments) {
         
+	background.copyTo(output);
+    
     Point2i location = Point2i (static_cast<int>(omoments.dM10_by_dArea() - foreground.cols/2) ,
                                 static_cast<int>(omoments.dM01_by_dArea() - foreground.rows/2));
 
+    
     // check if whether the coordinates are possible to draw
 	int fore_weight = foreground.cols;
 	int fore_height	= foreground.rows;
@@ -293,7 +290,6 @@ void overlay_image(const Mat &background, const Mat &foreground, Mat &output,con
         throw std::invalid_argument("get_fitted_to_4cirles exactly needs 4 circles");
 	}
 
-	background.copyTo(output);
 
 	// start at the row indicated by location, or at row 0 if location.y is negative.
 	for(int y = std::max(location.y , 0); y < background.rows; ++y) {
